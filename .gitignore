@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Env
+.env
+.env.local
+
+# DB / storage
+backend/talkify.db
+backend/storage/
+backend/test_talkify.db
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store

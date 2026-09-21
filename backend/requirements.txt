@@ -1,0 +1,45 @@
+# --- Web framework ---
+# These versions are pinned deliberately, not arbitrarily: a newer FastAPI
+# pulled in without pinning (e.g. from a bare `pip install fastapi`, or a
+# stale/conflicting global install shadowing your venv) has been observed
+# to change how routers are registered internally, which can cause routes
+# like /api/auth/login to intermittently 404 even though the code is
+# correct. If you ever hit that, run `pip show fastapi` inside your
+# activated venv and confirm it says exactly 0.115.0 — see
+# docs/SETUP.md's troubleshooting section.
+fastapi==0.115.0
+starlette==0.38.6
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+
+# --- Validation / settings ---
+pydantic==2.9.2
+pydantic-settings==2.5.2
+email-validator==2.2.0
+
+# --- Database ---
+sqlalchemy==2.0.35
+alembic==1.13.2
+psycopg2-binary==2.9.9   # only needed if DATABASE_URL points at Postgres
+
+# --- Auth ---
+python-jose[cryptography]==3.3.0
+passlib==1.7.4
+bcrypt==4.0.1   # passlib 1.7.4 is incompatible with bcrypt>=4.1's stricter API
+
+# --- Document processing ---
+pymupdf==1.24.10
+python-docx==1.1.2
+pandas==2.2.3
+
+# --- ML / RAG ---
+sentence-transformers==3.1.1
+faiss-cpu==1.9.0
+numpy==1.26.4
+
+# --- LLM ---
+groq==0.11.0
+
+# --- Testing ---
+pytest==8.3.3
+httpx==0.27.2

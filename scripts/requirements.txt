@@ -1,0 +1,2 @@
+# Only needed to run verify_setup.py — not part of the app itself.
+requests==2.32.3
