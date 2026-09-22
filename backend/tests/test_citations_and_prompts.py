@@ -57,6 +57,25 @@ def test_prompt_injection_inside_a_document_is_not_a_system_instruction():
     assert "Ignore all previous instructions" in messages[-1]["content"]
 
 
+def test_system_prompt_prioritizes_user_length_and_format_instructions():
+    """
+    Regression test: answers used to ignore explicit constraints like
+    "in 50 words" or "as bullet points" because the system prompt only
+    described a default formatting style, with nothing telling the model
+    an explicit user instruction should override it. This locks in that
+    the priority rule exists and is stated as overriding, and that it's
+    restated next to the question itself (not just once, far above a
+    potentially long context block).
+    """
+    assert "HIGHEST-PRIORITY RULE" in SYSTEM_PROMPT
+    assert "overrides every other instruction" in SYSTEM_PROMPT.lower()
+    assert "hard ceiling, not a suggestion" in SYSTEM_PROMPT.lower()
+
+    messages = build_messages("Summarize this in 50 words.", excerpts_for_prompt(SAMPLE_RETRIEVED))
+    final_turn = messages[-1]["content"]
+    assert "follow it exactly" in final_turn.lower()
+
+
 def test_extractive_fallback_does_not_sound_like_an_error():
     """
     Regression test: the fallback text used to open with "I don't have an

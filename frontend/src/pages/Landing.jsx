@@ -36,13 +36,13 @@ const STEPS = [
 export default function Landing() {
   return (
     <div className="min-h-screen bg-white">
-      <header className="max-w-6xl mx-auto flex items-center justify-between px-6 py-5">
-        <img src="/talkify-logo.png" alt="Talkify" className="h-9 w-auto" />
-        <nav className="flex items-center gap-3">
-          <Link to="/login" className="text-sm font-medium text-slate-600 hover:text-slate-900 px-3 py-2">
+      <header className="max-w-6xl mx-auto flex items-center justify-between px-4 sm:px-6 py-4 sm:py-5">
+        <img src="/talkify-logo.png" alt="Talkify" className="h-7 sm:h-9 w-auto" />
+        <nav className="flex items-center gap-1.5 sm:gap-3">
+          <Link to="/login" className="text-xs sm:text-sm font-medium text-slate-600 hover:text-slate-900 px-2.5 sm:px-3 py-2">
             Log in
           </Link>
-          <Link to="/register" className="text-sm font-medium text-white bg-ink hover:bg-slate-800 rounded-lg px-4 py-2 transition-colors">
+          <Link to="/register" className="text-xs sm:text-sm font-medium text-white bg-ink hover:bg-slate-800 rounded-lg px-3 sm:px-4 py-2 transition-colors">
             Get started
           </Link>
         </nav>
@@ -58,11 +58,11 @@ export default function Landing() {
           Talkify is an AI document intelligence assistant. Upload your files and get
           grounded, citation-backed answers — not guesses.
         </p>
-        <div className="mt-8 flex items-center justify-center gap-3">
-          <Link to="/register" className="rounded-lg bg-brand-gradient text-white font-medium px-6 py-3 hover:opacity-90 transition-opacity">
+        <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 px-4">
+          <Link to="/register" className="w-full sm:w-auto text-center rounded-lg bg-brand-gradient text-white font-medium px-6 py-3 hover:opacity-90 transition-opacity">
             Start for free
           </Link>
-          <Link to="/login" className="rounded-lg border border-slate-200 text-slate-700 font-medium px-6 py-3 hover:bg-slate-50 transition-colors">
+          <Link to="/login" className="w-full sm:w-auto text-center rounded-lg border border-slate-200 text-slate-700 font-medium px-6 py-3 hover:bg-slate-50 transition-colors">
             I already have an account
           </Link>
         </div>

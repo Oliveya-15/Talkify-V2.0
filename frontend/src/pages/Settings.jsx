@@ -9,8 +9,8 @@ export default function Settings() {
 
   return (
     <AppShell>
-      <div className="max-w-2xl mx-auto px-6 py-8">
-        <h1 className="text-2xl font-bold text-ink">Settings</h1>
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <h1 className="text-xl sm:text-2xl font-bold text-ink">Settings</h1>
 
         <section className="mt-6 bg-white border border-slate-200 rounded-xl p-6">
           <h2 className="font-semibold text-ink">Profile</h2>

@@ -1,14 +1,19 @@
 export function StatusBadge({ status }) {
+  // "uploaded" is a fleeting internal state (the instant before the
+  // background task picks it up) — showing it as "processing" avoids a
+  // confusing flicker between two different-looking badges within a second.
+  const display = status === 'uploaded' ? 'processing' : status;
+  const isActive = display === 'processing';
   const styles = {
     completed: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     processing: 'bg-amber-50 text-amber-700 border-amber-200',
-    uploaded: 'bg-slate-50 text-slate-600 border-slate-200',
     failed: 'bg-red-50 text-red-700 border-red-200',
     unsupported: 'bg-red-50 text-red-700 border-red-200',
   };
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${styles[status] || styles.uploaded}`}>
-      {status}
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border ${styles[display] || styles.processing}`}>
+      {isActive && <Spinner className="w-3 h-3" />}
+      {display}
     </span>
   );
 }

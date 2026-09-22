@@ -25,8 +25,8 @@ export default function History() {
 
   return (
     <AppShell>
-      <div className="max-w-3xl mx-auto px-6 py-8">
-        <h1 className="text-2xl font-bold text-ink">Chat History</h1>
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <h1 className="text-xl sm:text-2xl font-bold text-ink">Chat History</h1>
         <p className="text-slate-500 mt-1">Revisit or continue a previous conversation.</p>
 
         <input
@@ -47,7 +47,7 @@ export default function History() {
                 <li
                   key={c.id}
                   onClick={() => navigate('/chat')}
-                  className="px-5 py-4 flex items-center justify-between cursor-pointer hover:bg-slate-50 transition-colors"
+                  className="px-4 sm:px-5 py-4 flex items-center justify-between gap-3 cursor-pointer hover:bg-slate-50 transition-colors"
                 >
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-slate-800 truncate">{c.title}</p>

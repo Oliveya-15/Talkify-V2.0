@@ -10,8 +10,8 @@ export default function Analytics() {
 
   return (
     <AppShell>
-      <div className="max-w-4xl mx-auto px-6 py-8">
-        <h1 className="text-2xl font-bold text-ink">Analytics</h1>
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <h1 className="text-xl sm:text-2xl font-bold text-ink">Analytics</h1>
         <p className="text-slate-500 mt-1">Real usage numbers from your account — nothing here is estimated.</p>
 
         {!stats ? (

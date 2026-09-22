@@ -82,7 +82,18 @@ cp .env.example .env
 npm run dev
 ```
 
-Everytime : docker compose up --build
+For Docker : docker compose up --build
+
+
+Locally :
+cd backend                                cd frontend
+uvicorn app.main:app --reload             npm run dev
+
+
+New Changes Push :
+git add .
+git commit -m "Describe what you changed here"
+git push
 App at `http://localhost:5173`.
 
 First document upload will download the embedding model

@@ -9,53 +9,89 @@ const NAV_ITEMS = [
   { to: '/analytics', label: 'Analytics', icon: AnalyticsIcon },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ open = false, onClose = () => {} }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
+  const closeOnNavigate = () => onClose();
+
   return (
-    <aside className="hidden md:flex md:flex-col w-64 shrink-0 border-r border-slate-200 bg-white h-screen sticky top-0">
-      <div className="flex items-center gap-2 px-5 h-16 border-b border-slate-200">
-        <img src="/talkify-logo.png" alt="Talkify" className="h-8 w-auto" />
-      </div>
+    <>
+      {/* Backdrop — mobile/tablet only, tapping it closes the drawer */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/30 md:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
 
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                isActive
-                  ? 'bg-brand-50 text-brand-700'
-                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-              }`
-            }
+      <aside
+        className={`
+          fixed inset-y-0 left-0 z-50 flex flex-col w-64 shrink-0 border-r border-slate-200 bg-white h-screen
+          transform transition-transform duration-200 ease-in-out
+          ${open ? 'translate-x-0' : '-translate-x-full'}
+          md:static md:z-auto md:translate-x-0 md:sticky md:top-0
+        `}
+      >
+        <div className="flex items-center justify-between px-5 h-16 border-b border-slate-200">
+          <img src="/talkify-logo.png" alt="Talkify" className="h-8 w-auto" />
+          <button
+            onClick={onClose}
+            aria-label="Close menu"
+            className="md:hidden text-slate-400 hover:text-slate-600 p-1 -mr-1"
           >
-            <Icon className="w-4 h-4" />
-            {label}
-          </NavLink>
-        ))}
-      </nav>
-
-      <div className="p-3 border-t border-slate-200">
-        <div className="flex items-center gap-3 px-2 py-2">
-          <div className="w-8 h-8 rounded-full bg-brand-gradient text-white flex items-center justify-center text-xs font-semibold shrink-0">
-            {(user?.name || '?').slice(0, 1).toUpperCase()}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-slate-800 truncate">{user?.name}</p>
-            <p className="text-xs text-slate-500 truncate">{user?.email}</p>
-          </div>
+            <CloseIcon className="w-5 h-5" />
+          </button>
         </div>
-        <button
-          onClick={() => { logout(); navigate('/login'); }}
-          className="mt-1 w-full text-left px-2 py-2 text-sm text-slate-500 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-        >
-          Log out
-        </button>
-      </div>
-    </aside>
+
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+          {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              onClick={closeOnNavigate}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-brand-50 text-brand-700'
+                    : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                }`
+              }
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="p-3 border-t border-slate-200">
+          <div className="flex items-center gap-3 px-2 py-2">
+            <div className="w-8 h-8 rounded-full bg-brand-gradient text-white flex items-center justify-center text-xs font-semibold shrink-0">
+              {(user?.name || '?').slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium text-slate-800 truncate">{user?.name}</p>
+              <p className="text-xs text-slate-500 truncate">{user?.email}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => { logout(); navigate('/login'); }}
+            className="mt-1 w-full text-left px-2 py-2 text-sm text-slate-500 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+          >
+            Log out
+          </button>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function CloseIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
   );
 }
 

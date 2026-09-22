@@ -37,12 +37,12 @@ def _call_groq(messages: list[dict]) -> str | None:
             temperature=0.2,
             max_tokens=1024,
         )
-        return completion.choices[0].message.content
+        content = completion.choices[0].message.content
+        if not content or not content.strip():
+            logger.warning("Groq returned an empty response, falling back to extractive mode.")
+            return None
+        return content
     except Exception as e:  # noqa: BLE001 - any API failure triggers the extractive fallback
-        # This is the single most important log line for diagnosing "why do
-        # I only ever get the fallback text" — a deprecated/renamed model ID,
-        # an invalid key, or a rate limit will show up here with the real
-        # reason instead of failing silently.
         logger.warning("Groq call failed, falling back to extractive mode: %s", e)
         return None
 
@@ -78,8 +78,7 @@ def ask_question(db: Session, conversation: Conversation, question: str) -> Mess
     messages = prompt_builder.build_messages(question, excerpts, chat_history=history)
 
     answer = _call_groq(messages)
-    used_fallback = answer is None
-    if used_fallback:
+    if not answer or not answer.strip():
         answer = _extractive_fallback(excerpts)
 
     citations = citations_module.build_citations(retrieved)
