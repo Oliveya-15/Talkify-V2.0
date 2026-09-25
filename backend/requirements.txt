@@ -33,9 +33,14 @@ python-docx==1.1.2
 pandas==2.2.3
 
 # --- ML / RAG ---
-sentence-transformers==3.1.1
+# No sentence-transformers/PyTorch here anymore — see rag/embeddings.py's
+# module docstring for why. Embeddings now come from a hosted API call
+# (requests, below) instead of a locally-loaded model, which is what
+# makes the whole backend fit comfortably in a free host's ~512MB limit:
+# without PyTorch, this container needs well under 100MB.
 faiss-cpu==1.9.0
 numpy==1.26.4
+requests==2.32.3
 
 # --- LLM ---
 groq==0.11.0
