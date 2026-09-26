@@ -24,7 +24,8 @@ can cite exactly which passage supports each claim.
 3. `document_service.process_document` calls `rag.pipeline.ingest_document`:
    - `loaders.py` extracts text per-page (PyMuPDF/python-docx/pandas/stdlib).
    - `chunking.py` splits each page into ~1000-character overlapping chunks.
-   - `embeddings.py` embeds every chunk with `all-MiniLM-L6-v2`.
+   - `embeddings.py` embeds every chunk via the Gemini embedding API
+     (`gemini-embedding-001`, requested at 384 dimensions).
    - `vector_store.py` builds a FAISS index for that document.
    - `keyword_search.py` indexes the same chunks into SQLite FTS5.
 4. `DocumentChunk` rows are saved, each with a `vector_ref` pointing at
@@ -39,13 +40,81 @@ can cite exactly which passage supports each claim.
    `chat_service._call_groq` (or the extractive fallback) produces the
    final answer.
 
-### Why sentence-transformers + FAISS instead of a hosted embedding/vector DB API?
+### Why a hosted embedding API instead of a local model?
 
-Cost and simplicity for a student project: both run entirely locally on
-CPU, no per-request billing, no external service dependency once the
-model is cached. FAISS's `IndexFlatIP` is exact (not approximate), which
-is both simpler to reason about and fast enough at the scale of a single
-document's chunks.
+This wasn't the original design — Talkify originally ran
+sentence-transformers locally via PyTorch, which is genuinely the more
+commonly recommended approach for a project like this: free, no
+external dependency, fully explainable. It's also what I'd default to
+again on a server with normal memory. The problem showed up specifically
+in deployment: PyTorch needs 200MB-1GB+ of resident memory just to run,
+independent of which model is loaded into it, and every genuinely free,
+card-free hosting tier in 2026 caps around 512MB. I spent real time
+trying to make the local model fit — pinning thread counts, batching
+encode calls, forcing garbage collection and `malloc_trim` after each
+batch, switching to a much smaller model — and it still got OOM-killed
+under real load. At that point the honest conclusion was that this was
+an architectural mismatch, not a tuning problem, so I removed PyTorch
+entirely and moved embedding generation to Google's Gemini API instead.
+Measured result: backend memory dropped from an OOM-crashing 512MB+ to
+about 147MB RSS (checked via `/proc/<pid>/status`, not guessed).
+The trade-off, stated plainly: embeddings now need internet access and a
+free API key, and there's no local fallback if that call fails — see
+`docs/ML_EXPLANATION.md`'s Embeddings section for the full reasoning.
+
+### Tell me about a hard bug you debugged in this project.
+
+Three, actually, all found in the same deployment push, each with a
+distinct root cause worth walking through separately:
+
+**1. Auth routes 404ing despite the server starting normally.**
+Symptom: `POST /api/auth/login` returned a real `404 {"detail":"Not
+Found"}` — not a crash, not a timeout, an actual "this route doesn't
+exist" response, even though the server logged "Application startup
+complete." Root cause: I'd installed FastAPI with a bare `pip install
+fastapi` at one point instead of the pinned `requirements.txt`, which
+pulled a materially newer release with different internal router
+registration behavior that silently dropped routes. Fix: pinned
+`fastapi` and `starlette` together to exact versions, and wrote
+`scripts/verify_setup.py`, which checks the installed FastAPI version by
+name and confirms expected routes exist in the OpenAPI schema — so this
+exact failure mode is caught immediately if it ever recurs, rather than
+requiring another multi-hour debugging session.
+
+**2. Documents stuck on "processing" forever, no error anywhere.**
+Symptom: upload would succeed (`201 Created`), then the document would
+just... never finish. No error in the frontend, nothing obviously wrong
+in the backend logs. Root cause, once I actually reasoned through the
+timing: there's a real gap — often 10-60+ seconds — between marking a
+document `"processing"` and finishing embedding, during which the
+background task does no database activity at all. Neon's pooled
+connection endpoint (PgBouncer) can silently close an idle connection in
+that window. SQLAlchemy had no way to detect this, so the *next* query
+threw — and the deeper bug was that nothing caught that exception. It
+escaped the background task silently, so the document's status was never
+touched again. Fix: `pool_pre_ping=True` and `pool_recycle=280` in
+`database.py` so a dead connection gets transparently replaced before
+use, *and* wrapping the entire background task in a try/except that
+guarantees the document ends up marked `failed` with a real message
+(using a fresh connection, since the original one might be the broken
+one) if anything goes wrong at all. The second fix matters independent
+of the first: it means *any* future unexpected failure surfaces as a
+clear error instead of an infinite spinner.
+
+**3. The backend container getting OOM-killed on every upload.**
+Covered above — worth naming here too because it's the most
+consequential of the three: it wasn't fixable by tuning, only by
+recognizing the architecture itself didn't fit the constraint and
+changing it.
+
+The pattern across all three: in each case the visible symptom (a 404, a
+stuck spinner, a crashed container) was several steps removed from the
+actual cause, and the fix that mattered wasn't just patching the
+symptom — for #1 it was adding a version-pinning safeguard, for #2 it
+was making failures loud instead of silent everywhere in the codebase,
+not just this one call site, and for #3 it was accepting that the
+original design decision needed to change rather than working around it
+indefinitely.
 
 ### Why hybrid search instead of just semantic search?
 
@@ -133,18 +202,25 @@ accuracy percentage with nothing behind it.)
   silently returning empty results.
 - DOCX pagination doesn't really exist in `python-docx`, so DOCX
   citations always say "page 1" (documented, not hidden).
-- Document processing is synchronous — fine for small student-project
-  files, but a production system would use a background job queue so
-  uploads return immediately.
-- No reranking model, no OCR, no Summary/Compare/Study-assistant pages
-  yet — cut for time, and explicitly listed as not-built in the README
-  rather than faked with a dead button.
+- Embeddings require internet access and a Gemini API key — there's no
+  offline/local fallback for that specific step (there is one for LLM
+  generation — see the extractive fallback above).
+- No reranking model, no Summary/Compare/Study-assistant pages yet — cut
+  for time, and explicitly listed as not-built in the README rather than
+  faked with a dead button.
+- Uploaded files and their FAISS/keyword indexes live on the backend's
+  local disk, which is ephemeral on Render's free tier — they don't
+  survive a redeploy or a long idle-triggered restart. Document
+  metadata in Postgres persists fine; only the actual search index
+  underneath it doesn't yet.
 
 ### What would you improve next?
 
-In priority order: (1) a background task queue for ingestion so large
-uploads don't block the request, (2) a real evaluation dataset with
-measured numbers checked into the repo, (3) the Document Viewer with
-inline page navigation and highlighting so a citation click actually
-jumps to the right spot, (4) Summary and Study Assistant features, which
-reuse the same retrieval pipeline with a different prompt.
+In priority order: (1) move uploaded files and indexes into
+Postgres-backed or object storage so they survive a redeploy — the one
+remaining piece of the free-tier architecture that isn't fully durable,
+(2) a real evaluation dataset with measured recall@k/MRR numbers checked
+into the repo, (3) the Document Viewer with inline page navigation and
+highlighting so a citation click actually jumps to the right spot, (4)
+Summary and Study Assistant features, which reuse the same retrieval
+pipeline with a different prompt.

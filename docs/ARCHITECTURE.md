@@ -12,9 +12,10 @@ concept of separate users.
 
 **What was preserved conceptually:** the pipeline shape (extract → chunk
 → embed → index → retrieve → generate) is the same idea, because it's
-the right idea. The embedding model choice (`all-MiniLM-L6-v2`) and
-FAISS are kept for the same reason: free, local, fast enough, easy to
-explain.
+the right idea. FAISS is kept from the original design for the same
+reason it was chosen then: free, fast enough, easy to explain. The
+embedding source itself did change later — see the Deployment section
+below for why a hosted API replaced the originally-local model.
 
 **What was rebuilt, and why:** everything that made the old app a demo
 rather than a product.
@@ -79,7 +80,8 @@ backend/app/
   rag/                 the hand-built pipeline (see docs/ML_EXPLANATION.md for the "why")
     loaders.py          PDF/DOCX/TXT/MD/CSV → [{"text":..., "page":...}]
     chunking.py          from-scratch recursive splitter, no LangChain
-    embeddings.py         sentence-transformers wrapper
+    embeddings.py         Gemini embedding API client (retries, batching, L2-normalize —
+                           not a local model; see docs/ML_EXPLANATION.md for why)
     vector_store.py       FAISS index build/search, one index file per document
     keyword_search.py     SQLite FTS5 full-text index
     hybrid_search.py      pure score-merging logic (unit-testable without DB/FAISS)
@@ -89,9 +91,10 @@ backend/app/
   evaluation/
     retrieval_metrics.py  recall@k / MRR against a manually verified dataset
     dataset.json           starts empty; see evaluation/README.md
-tests/                  26 pytest tests: unit (chunking, hybrid search, citations,
-                        prompt injection, loaders) + API integration (auth, isolation,
-                        upload validation)
+tests/                  40+ pytest tests: unit (chunking, hybrid search, citations,
+                        prompt injection, loaders, embedding batching/retries) +
+                        API integration (auth, isolation, upload validation, background
+                        processing failure handling)
 ```
 
 ## Frontend module map
@@ -161,10 +164,51 @@ backend/storage/
 
 ## Deployment
 
-`docker-compose.yml` at the repo root runs three services: `db`
-(Postgres 16), `backend` (built from `backend/Dockerfile`, configured to
-use Postgres via `DATABASE_URL`), and `frontend` (built from
-`frontend/Dockerfile`, Vite dev server). This was written and reviewed
-carefully but not run end-to-end in the sandbox this project was
-authored in (no Docker daemon available there) — see the caveat in
-`docs/SETUP.md`.
+Live at **[talkify-v2-0.vercel.app](https://talkify-v2-0.vercel.app)**
+(frontend, on Vercel) talking to **[talkify-v2-0-backend.onrender.com](https://talkify-v2-0-backend.onrender.com)**
+(backend, on Render's free tier), with Neon for Postgres — all three
+genuinely free, no card on file anywhere.
+
+`docker-compose.yml` at the repo root also works for running the whole
+stack (Postgres + backend + frontend) locally in containers, useful for
+development without touching any cloud service at all.
+
+### Getting to a stable free deployment took real debugging, not just config
+
+This is worth documenting honestly because each problem was a distinct,
+real production issue with a specific root cause — not vague "it didn't
+work" trial and error:
+
+1. **A version-pinning bug caused silent 404s on every auth route.**
+   Installing FastAPI without an exact pin (`pip install fastapi` instead
+   of `pip install -r requirements.txt`) pulled a materially newer
+   release with different internal router registration — the server
+   started and logged normally, but `/api/auth/login` genuinely didn't
+   exist on the running app. Fixed by pinning `fastapi` and `starlette`
+   together, and added `scripts/verify_setup.py` to catch this exact
+   failure mode by name if it recurs.
+2. **Neon's pooled endpoint silently drops idle connections.** Between
+   marking a document "processing" and finishing embedding, there's a
+   real gap with no database activity — long enough for Neon's PgBouncer
+   layer to close the connection. SQLAlchemy had no way to know, so the
+   next query threw, and — the actual bug — that exception wasn't caught
+   anywhere in the background task, leaving documents stuck on
+   "processing" forever with no error surfaced anywhere. Fixed with
+   `pool_pre_ping` + `pool_recycle` in `database.py`, and a proper
+   try/except in the background task that guarantees a document ends up
+   `failed` with a real message using a *fresh* connection, rather than
+   silently hanging (see `api/routes/documents.py::_mark_failed`).
+3. **PyTorch doesn't fit in a free host's memory budget, at any model
+   size.** `sentence-transformers` plus PyTorch needs 200MB-1GB+ of
+   resident memory just to run, and every card-free free hosting tier in
+   2026 caps around 512MB — the OS OOM-killed the container mid-request
+   regardless of how aggressively the model itself was shrunk or how
+   many threads were limited. The actual fix was architectural, not a
+   tuning knob: removing PyTorch entirely and calling Google's Gemini
+   embedding API instead. Measured result: backend RSS dropped from
+   OOM-crashing 512MB+ to **~147MB** — verified with
+   `/proc/<pid>/status`, not estimated.
+
+See `docs/INTERVIEW_PREPARATION.md` for how to talk through this
+sequence in an interview — it's a more interesting story than "it
+deployed on the first try."

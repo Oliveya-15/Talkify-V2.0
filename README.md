@@ -1,78 +1,131 @@
-# Talkify 2.0 — AI Document Intelligence & Research Assistant
+<div align="center">
 
-Talkify lets you upload documents (PDF, DOCX, TXT, Markdown, CSV) and ask
-questions about them in natural language. Answers are grounded in your
-documents and come with citations pointing to the exact source page —
-not invented, and never from another user's files.
+<img src="frontend/public/talkify-logo.png" alt="Talkify" height="56" />
 
-This is version 2.0 of a rebuild from an earlier Streamlit prototype
-(`app.py` in the project history). See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-for what changed and why.
+### AI Document Intelligence & Research Assistant
 
-## Changelog
+Upload a document, ask it questions in plain English, and get answers grounded in the actual text — with citations pointing to the exact page, never invented.
 
-**Round 2 fixes** (in response to real-world testing):
-- **Fixed a 404 on `/api/auth/login` and `/register`.** Root cause found
-  and reproduced: an unpinned FastAPI install can silently pull a much
-  newer version with different internal routing that drops registered
-  routes. `requirements.txt` now pins `starlette` explicitly alongside
-  `fastapi` to prevent this, and `scripts/verify_setup.py` is a new
-  self-check script that catches this exact problem by name if it
-  happens again. See `docs/SETUP.md`'s troubleshooting section.
-- **Uploads no longer block the UI.** Processing (chunking, embedding,
-  indexing) now runs in a background task; the upload request returns
-  immediately and the frontend polls for status.
-- **Fixed the "here's what I found" fallback appearing even with an API
-  key configured.** Groq quietly moved the previous default model
-  (`llama-3.1-8b-instant`) to an Enterprise-only tier; the default is now
-  `openai/gpt-oss-20b`, and Groq call failures are now logged server-side
-  instead of failing silently, so a future model deprecation is
-  diagnosable instead of mysterious.
-- **Answers are now rendered as real Markdown** (headings, bold, lists)
-  in the chat UI, and the system prompt explicitly asks the model to
-  structure longer answers with lists/bold rather than a wall of text.
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-talkify--v2--0.vercel.app-black?logo=vercel&logoColor=white)](https://talkify-v2-0.vercel.app)
+[![Backend](https://img.shields.io/badge/API-Render-46E3B7?logo=render&logoColor=white)](https://talkify-v2-0-backend.onrender.com/api/health)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Neon-4169E1?logo=postgresql&logoColor=white)](https://neon.tech/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Status: honest checklist
+**[Try it live →](https://talkify-v2-0.vercel.app)**
 
-This was built in phases. Here's what's actually done vs. not, so nothing
-here is overstated:
+</div>
+
+---
+
+## What this is
+
+Talkify is a full-stack RAG (Retrieval-Augmented Generation) platform, built from scratch rather than assembled from a single LangChain call: hand-written document chunking, hybrid semantic + keyword search, citation-grounded generation, and per-user authentication and data isolation, all deployed for free without a credit card anywhere in the stack.
+
+It's the rebuild of an earlier Streamlit prototype (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for what changed and why) into something closer to a real product: persistent storage, real auth, multi-format ingestion, and a UI you'd actually want to use twice.
+
+**Try it now:** register a free account at [talkify-v2-0.vercel.app](https://talkify-v2-0.vercel.app), upload a PDF or `.txt` file, and ask it a question.
+
+## Why this stands out
+
+Most student RAG projects get built once and never see a real user or a real deployment constraint. This one did, and every constraint it hit forced a real engineering decision rather than a workaround:
+
+- **A version-pinning bug silently dropped auth routes in production** — the server started fine and logged normally, but `/api/auth/login` returned a genuine 404. Root-caused to an unpinned FastAPI install pulling a materially different router implementation. Fixed with exact pins plus a self-check script (`scripts/verify_setup.py`) that catches this exact failure mode by name if it ever recurs.
+- **Documents got stuck on "processing" forever, silently.** Root cause: Neon's pooled Postgres connection can go stale during the real gap between marking a document "processing" and finishing embedding — and the resulting exception wasn't caught anywhere, so nothing ever marked it failed. Fixed with connection health-checks (`pool_pre_ping`) and a background-task safety net that guarantees a document always ends up in a terminal state with a real error message, never an infinite spinner.
+- **PyTorch doesn't fit in a free host's memory budget, at any model size.** Local embeddings via `sentence-transformers` need 200MB–1GB+ of RAM just for PyTorch to run — every card-free hosting tier in 2026 caps around 512MB. After tuning thread counts, batch sizes, and memory-trimming still wasn't enough, the actual fix was architectural: move embedding generation to a hosted API entirely. **Measured result: backend memory dropped from an OOM-crashing 512MB+ to ~147MB RSS**, verified via `/proc/<pid>/status`, not estimated.
+
+Full write-up of each, with the actual reasoning, in [`docs/INTERVIEW_PREPARATION.md`](docs/INTERVIEW_PREPARATION.md).
+
+## Architecture
+
+```mermaid
+flowchart TD
+    U(["User's browser"])
+    FE["React + Vite<br/>hosted on Vercel"]
+    BE["FastAPI backend<br/>hosted on Render (Docker)"]
+    DB[("Neon PostgreSQL<br/>users · documents · chunks · chats")]
+    IDX[("FAISS vector index<br/>+ SQLite FTS5<br/>one per document")]
+    GEMINI["Gemini Embedding API<br/>(Google AI Studio, free tier)"]
+    GROQ["Groq LLM API<br/>(answer generation, free tier)"]
+
+    U -- HTTPS --> FE
+    FE -- "REST + JWT" --> BE
+    BE -- SQLAlchemy --> DB
+    BE -- "chunk text → embed" --> GEMINI
+    GEMINI -- vectors --> IDX
+    BE -- "hybrid retrieval\n(semantic + keyword)" --> IDX
+    BE -- "grounded prompt\n+ retrieved excerpts" --> GROQ
+    GROQ -- "cited answer" --> BE
+    BE -- JSON --> FE
+```
+
+**Request flow for a question:** the frontend sends a question scoped to one or more documents → the backend runs semantic search (FAISS) and keyword search (SQLite FTS5) in parallel → merges and ranks the results (`hybrid_search.py`) → builds a prompt that separates system instructions, untrusted document content, and the user's question (prompt-injection defense) → Groq generates an answer citing the numbered excerpts → the response is persisted and returned with structured citation data the frontend renders as clickable source chips.
+
+Every stage — chunking, hybrid retrieval, prompt construction, citation mapping — is a separate, readable Python module in `backend/app/rag/`, not hidden behind a single framework call. See [`docs/ML_EXPLANATION.md`](docs/ML_EXPLANATION.md) for the concepts and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full module map.
+
+## Live deployment
+
+| Service | Provider | Notes |
+|---|---|---|
+| Frontend | [Vercel](https://vercel.com) | Free tier, deploys from `frontend/` on push |
+| Backend | [Render](https://render.com) | Free tier (512MB RAM), Docker, deploys from `backend/` |
+| Database | [Neon](https://neon.tech) | Free serverless Postgres |
+| Embeddings | Google Gemini API | Free tier, `gemini-embedding-001` |
+| LLM generation | Groq API | Free tier, `openai/gpt-oss-20b` |
+
+Zero-cost end to end, no credit card on file anywhere. Full deployment walkthrough (and the exact failure modes to check for if something breaks) in [`docs/SETUP.md`](docs/SETUP.md).
+
+> **One honest caveat:** Render's free tier has no persistent disk. Uploaded files and their search indexes don't survive a redeploy or a long idle-triggered restart — document records persist in Postgres, but you'd need to re-upload after either event. Fine for a live demo, on the list to fix properly (see Roadmap).
+
+## Feature status
+
+<details>
+<summary><b>Click to expand the full, honest checklist</b> — nothing below is overstated, and nothing is faked with a dead button.</summary>
 
 | Area | Status |
 |---|---|
 | Auth (register/login/JWT), per-user data isolation | ✅ Done, tested |
 | Document upload + validation (type/size) | ✅ Done, tested |
 | Hand-built ingestion pipeline (loaders → chunking → embeddings → FAISS → FTS5) | ✅ Done |
+| Background processing (non-blocking upload, live status polling) | ✅ Done |
 | Hybrid retrieval (semantic + keyword, weighted merge) | ✅ Done, unit tested |
 | Citation-grounded chat, with a free extractive fallback | ✅ Done |
 | Multi-document chat | ✅ Done |
 | Chat history | ✅ Done |
-| Dashboard, real (non-fabricated) analytics | ✅ Done |
-| Docker Compose (Postgres + backend + frontend) | ✅ Written, backend verified to boot; see caveats below |
+| Dashboard with real (non-fabricated) analytics | ✅ Done |
+| Responsive UI (mobile drawer nav, adaptive layouts) | ✅ Done |
+| Live production deployment (Vercel + Render + Neon) | ✅ Done |
 | Retrieval evaluation harness | ✅ Built; dataset starts **empty** — fill it with your own questions |
 | Document Summary page | ❌ Not built — no backend endpoint yet |
 | Document Comparison page | ❌ Not built |
 | Study Assistant (flashcards/MCQs) | ❌ Not built |
 | Document Viewer (PDF page navigation, in-page highlighting) | ❌ Not built — documents can be uploaded/deleted/chatted with, but not previewed inline |
 | OCR for scanned PDFs | ❌ Not built (fails clearly instead of silently returning nothing) |
-| Frontend automated tests | ❌ Not built (backend has 26 automated tests) |
+| Persistent file/index storage across redeploys | ❌ Not built yet — see the caveat above |
+| Frontend automated tests | ❌ Not built (backend has 40+ automated tests) |
 
-Sections 6–14 of the original spec are only partially realized: the pieces
-that make the RAG pipeline and auth genuinely work are done and tested;
-the extra productivity pages (summary/compare/study) were the first thing
-cut when time ran out, in line with the spec's own instruction not to
-fake a feature or ship a dead button.
+</details>
 
-## Quick start (local, no Docker)
+## Tech stack
+
+**Backend:** Python, FastAPI, SQLAlchemy, Pydantic, PyMuPDF, python-docx, pandas, FAISS, SQLite FTS5, Gemini Embedding API, Groq LLM API
+**Frontend:** React, Vite, Tailwind CSS, React Router, react-markdown
+**Database:** PostgreSQL (Neon) in production, SQLite for zero-setup local dev
+**Deployment:** Docker, Render, Vercel
+
+## Quick start
 
 **Backend:**
 ```bash
 cd backend
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env                              # edit SECRET_KEY at minimum
+cp .env.example .env   # set SECRET_KEY and GEMINI_API_KEY at minimum
 uvicorn app.main:app --reload
 ```
-API docs at `http://localhost:8000/docs` (FastAPI's automatic OpenAPI UI).
+API docs at `http://localhost:8000/docs`.
 
 **Frontend:**
 ```bash
@@ -81,47 +134,15 @@ npm install
 cp .env.example .env
 npm run dev
 ```
-
-For Docker : docker compose up --build
-
-
-Locally :
-cd backend                                cd frontend
-uvicorn app.main:app --reload             npm run dev
-
-
-New Changes Push :
-git add .
-git commit -m "Describe what you changed here"
-git push
 App at `http://localhost:5173`.
 
-First document upload will download the embedding model
-(`sentence-transformers/all-MiniLM-L6-v2`, ~90MB) from Hugging Face — this
-needs internet access once; after that it's cached locally and fully
-offline.
-
-## Quick start (Docker)
-
+**Or with Docker:**
 ```bash
 docker compose up --build
 ```
-This starts Postgres, the backend (against Postgres, not SQLite), and the
-frontend. Set `GROQ_API_KEY` and `SECRET_KEY` as environment variables or
-in a `.env` file at the repo root first (see `backend/.env.example` for
-what they mean). **Caveat:** I wrote and reviewed this Compose file
-carefully but could not run `docker compose up` inside the sandbox this
-project was built in (no Docker daemon available there) — please treat it
-as reviewed-but-unverified and file an issue if something doesn't start.
+Runs Postgres, backend, and frontend together. Set `SECRET_KEY`, `GEMINI_API_KEY`, and (optionally) `GROQ_API_KEY` as environment variables first.
 
-## Environment variables
-
-See `backend/.env.example` for the full list with explanations. The two
-that matter most:
-- `DATABASE_URL` — defaults to a local SQLite file, zero setup required.
-- `GROQ_API_KEY` — optional. Without it, chat still works in **extractive
-  mode**: real retrieved excerpts with citations, no LLM-generated prose.
-  Get a free key at https://console.groq.com if you want generated answers.
+Embeddings require a free [Gemini API key](https://aistudio.google.com/apikey) (no card) — there's no offline fallback for that specific step. LLM generation works without a key too, in a clean extractive fallback mode (real retrieved excerpts, no generated prose) if `GROQ_API_KEY` is left blank.
 
 ## Testing
 
@@ -129,44 +150,32 @@ that matter most:
 cd backend
 pytest -v
 ```
-26 tests pass, covering chunking, hybrid-search score merging, citation
-mapping, prompt-injection defense, document loaders, and full API flows
-(auth, upload validation, cross-user isolation). One test needs to
-download the embedding model and is skipped (not failed) if there's no
-internet access — see [`docs/SETUP.md`](docs/SETUP.md) for details.
+40+ tests covering chunking, hybrid-search score merging, citation mapping, prompt-injection defense, document loaders, embedding batching/retry logic, and full API flows (auth, upload validation, cross-user isolation, background-processing failure handling). One test needs live internet access to the Gemini API and is skipped (not failed) without it.
 
 ## Documentation
 
-- [`docs/SETUP.md`](docs/SETUP.md) — detailed local + Docker setup, troubleshooting
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — system design, what was preserved/rebuilt from the old app
-- [`docs/ML_EXPLANATION.md`](docs/ML_EXPLANATION.md) — embeddings, hybrid search, RAG, evaluation explained simply
+- [`docs/SETUP.md`](docs/SETUP.md) — local + Docker + free production deployment, with troubleshooting for every real issue hit along the way
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — full system design, module map, and the production debugging story
+- [`docs/ML_EXPLANATION.md`](docs/ML_EXPLANATION.md) — embeddings, hybrid search, RAG, and evaluation explained simply, mapped to real code
 - [`docs/API_DOCUMENTATION.md`](docs/API_DOCUMENTATION.md) — every endpoint, with examples
-- [`docs/INTERVIEW_PREPARATION.md`](docs/INTERVIEW_PREPARATION.md) — Q&A matched to what's actually implemented
-- `backend/evaluation/README.md` — how to build a real retrieval evaluation dataset
-
-## Tech stack
-
-Backend: Python, FastAPI, SQLAlchemy, Pydantic, PyMuPDF, python-docx,
-pandas, sentence-transformers, FAISS, SQLite FTS5, Groq.
-Frontend: React, Vite, Tailwind CSS, React Router.
-Database: SQLite (dev) / PostgreSQL (production, via `DATABASE_URL`).
-Deployment: Docker, Docker Compose.
+- [`docs/INTERVIEW_PREPARATION.md`](docs/INTERVIEW_PREPARATION.md) — Q&A matched to what's actually implemented, including the three production bugs above
+- [`backend/evaluation/README.md`](backend/evaluation/README.md) — how to build a real retrieval evaluation dataset
 
 ## Known limitations
 
-- No OCR: scanned PDFs with no text layer fail with a clear error rather
-  than silently returning nothing.
-- DOCX has no real page concept (`python-docx` doesn't expose pagination),
-  so DOCX citations always say "page 1" — documented, not hidden.
-- Document processing runs synchronously in the upload request. Fine for
-  a student project's file sizes; a production system would move this to
-  a background job queue (Celery/RQ) so uploads return instantly.
-- Hybrid search weights (0.7 semantic / 0.3 keyword) are the paper's
-  suggested starting point, not something tuned against real data yet —
-  `backend/evaluation/` is where you'd do that tuning.
-- No reranking model — the spec lists this as optional, and it was cut
-  along with the productivity pages above.
+- No OCR: scanned PDFs with no text layer fail with a clear error rather than silently returning nothing.
+- DOCX has no real page concept (`python-docx` doesn't expose pagination), so DOCX citations always say "page 1" — documented, not hidden.
+- Embeddings need internet access and a Gemini API key; there's no local fallback for that specific step.
+- Uploaded files and search indexes live on ephemeral disk in production — see the deployment caveat above.
+- Hybrid search weights (0.7 semantic / 0.3 keyword) are a reasonable starting point, not something tuned against real measured data yet — `backend/evaluation/` is where that tuning would happen.
+
+## Roadmap
+
+1. Move uploaded files and FAISS/FTS5 indexes into durable storage (Postgres-backed or object storage) so they survive a redeploy.
+2. Build out a real evaluation dataset with measured recall@k/MRR checked into the repo.
+3. Document Viewer with inline page navigation and citation-click highlighting.
+4. Summary and Study Assistant features, reusing the existing retrieval pipeline with different prompts.
 
 ## License
 
-MIT — see `LICENSE`.
+MIT — see [`LICENSE`](LICENSE).

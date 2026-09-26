@@ -22,9 +22,13 @@ cp .env.example .env
 Open `.env` and set at minimum:
 ```
 SECRET_KEY=<run: python -c "import secrets; print(secrets.token_hex(32))">
+GEMINI_API_KEY=<free key, no card: https://aistudio.google.com/apikey>
 ```
 Everything else has a sensible default (SQLite database, extractive-only
-chat with no `GROQ_API_KEY`).
+chat with no `GROQ_API_KEY`). `GEMINI_API_KEY` is the one variable that
+isn't optional — document processing calls the Gemini embedding API for
+every upload, and there's no local/offline fallback for that specific
+step (there is one for chat generation — see `GROQ_API_KEY` below).
 
 ```bash
 uvicorn app.main:app --reload
@@ -33,10 +37,6 @@ uvicorn app.main:app --reload
 Visit `http://localhost:8000/docs` for the interactive API docs (FastAPI
 generates this automatically from the route type hints — nothing extra
 to write).
-
-The first time you upload a document, `sentence-transformers` downloads
-its embedding model (~90MB) from Hugging Face. This needs internet once;
-after that it's cached in `~/.cache/huggingface` and works fully offline.
 
 ## 2. Backend — with PostgreSQL instead of SQLite
 
@@ -69,7 +69,7 @@ Visit `http://localhost:5173`.
 
 ```bash
 # from the repo root
-cp backend/.env.example .env       # docker-compose.yml reads SECRET_KEY / GROQ_API_KEY from here
+cp backend/.env.example .env       # docker-compose.yml reads SECRET_KEY / GEMINI_API_KEY / GROQ_API_KEY from here
 docker compose up --build
 ```
 - Backend: `http://localhost:8000`
@@ -82,16 +82,85 @@ docker compose up --build
 > Docker daemon, so `docker compose up` itself could not be run end-to-end
 > here. Please treat it as reviewed-but-unverified on first use.
 
-## 5. Running tests
+## 5. Free production deployment (Vercel + Render + Neon)
+
+This is the exact path the live deployment at
+[talkify-v2-0.vercel.app](https://talkify-v2-0.vercel.app) uses — zero
+cost, no credit card anywhere in the chain.
+
+**Get two free API keys first:**
+- Gemini (required): [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — sign in with any Google account, no card.
+- Groq (optional): [console.groq.com/keys](https://console.groq.com/keys) — leave unset to run chat in extractive-fallback mode.
+
+**Generate a production secret:**
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+**Database — Neon:**
+1. [neon.tech](https://neon.tech) → sign in → **New Project**.
+2. Copy the connection string, then change its prefix from `postgresql://`
+   to `postgresql+psycopg2://`, keeping `?sslmode=require` intact. Result:
+   ```
+   postgresql+psycopg2://<user>:<password>@<host>.neon.tech/<db>?sslmode=require
+   ```
+3. No manual migration needed — `Base.metadata.create_all()` runs on the
+   app's startup hook and creates every table on first boot.
+
+**Backend — Render:**
+1. [render.com](https://render.com) → sign in with GitHub (no card for free tier).
+2. **New +** → **Web Service** → connect this repo.
+3. **Root Directory**: `backend`. **Runtime**: Docker (auto-detected). **Instance Type**: Free.
+4. Environment variables:
+
+   | Key | Value |
+   |---|---|
+   | `DATABASE_URL` | the Neon string above |
+   | `SECRET_KEY` | the generated secret above |
+   | `GEMINI_API_KEY` | your Gemini key |
+   | `GROQ_API_KEY` | your Groq key (or omit entirely) |
+   | `GROQ_MODEL` | `openai/gpt-oss-20b` |
+   | `CORS_ORIGINS` | `["http://localhost:5173"]` (revisit after the frontend is deployed) |
+
+   `CORS_ORIGINS` must be valid JSON — square brackets and double quotes
+   exactly as shown, or the app crashes on startup with a config
+   validation error.
+5. **Create Web Service**. Build takes a few minutes; watch the **Logs** tab.
+6. Verify before moving on:
+   ```bash
+   curl https://<your-service>.onrender.com/api/health
+   curl -X POST https://<your-service>.onrender.com/api/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{"name":"Test","email":"test@example.com","password":"password123"}'
+   ```
+   Confirming this works standalone, before touching the frontend, isolates
+   which half of the stack any later problem is in.
+
+**Frontend — Vercel:**
+1. [vercel.com](https://vercel.com) → import this repo.
+2. **Root Directory**: `frontend`. **Framework**: Vite.
+3. Environment variable: `VITE_API_URL` = your Render URL from above.
+4. Deploy.
+
+**Connect them:** back on Render, update `CORS_ORIGINS` to your real Vercel
+URL (`["https://your-app.vercel.app"]`) and save — this triggers an
+automatic redeploy.
+
+**Known trade-off:** Render's free tier has no persistent disk. Uploaded
+files and their FAISS/FTS5 indexes don't survive a redeploy or a long
+idle-triggered restart — document metadata in Postgres does. Fine for a
+live demo; see the README's Roadmap for the planned fix.
+
+## 6. Running tests
 
 ```bash
 cd backend
 pytest -v
 ```
 
-Expected: 26 passed. One test (`test_txt_upload_processes_successfully`)
-downloads the embedding model on first run; if you have no internet
-access at all it will report **skipped**, not failed, with an explicit
+Expected: 40+ passed. One test (`test_txt_upload_processes_successfully`)
+needs live internet access to the Gemini API on first run; if that's not
+available it will report **skipped**, not failed, with an explicit
 reason printed.
 
 ## Troubleshooting
@@ -159,10 +228,37 @@ incompatibility between `passlib==1.7.4` and `bcrypt>=4.1`. The pinned
 this error you likely have a newer bcrypt installed some other way —
 reinstall with `pip install "bcrypt==4.0.1"`.
 
-**Embedding model download fails / times out** — you're offline, or a
-firewall blocks huggingface.co. Document upload will mark the document
-as `failed` with a clear `processing_error` message rather than hanging
-or silently succeeding with no chunks.
+**Documents stuck on "processing" forever, no error anywhere** — this had
+a specific, confirmed cause in production: Neon's pooled Postgres
+connection can silently close during the real 10-60+ second gap between
+marking a document "processing" and finishing embedding, and the
+resulting exception wasn't being caught anywhere. Fixed with
+`pool_pre_ping`/`pool_recycle` in `database.py` and a background-task
+safety net (`api/routes/documents.py::_mark_failed`) that guarantees a
+document ends up in a terminal state (`completed` or `failed`) with a
+real error message. If you still see a document stuck, check Render's
+**Logs** tab for a `talkify.documents` logger entry — the real reason
+will be there now instead of nowhere.
+
+**Upload fails immediately with a `GEMINI_API_KEY is not configured`
+error** — exactly what it says: set `GEMINI_API_KEY` in your environment.
+There's no local embedding fallback (unlike chat generation, which
+degrades gracefully without `GROQ_API_KEY`) — see
+`docs/ML_EXPLANATION.md`'s Embeddings section for why.
+
+**Upload fails with a Gemini API error mentioning 429 or rate limits** —
+free-tier rate limit. `embeddings.py` already retries transient failures
+with backoff; a persistent 429 means you're uploading unusually large
+documents unusually fast for a free key.
+
+**Backend gets OOM-killed / container restarts on every upload** — this
+was a real, confirmed issue with an earlier version of this project that
+ran embeddings locally via PyTorch, which needs 200MB-1GB+ of RAM
+independent of model size — more than free hosting tiers' ~512MB limit
+allows. It's resolved architecturally now (embeddings call the Gemini
+API instead of loading a local model — see `docs/INTERVIEW_PREPARATION.md`
+for the full story), so this shouldn't recur unless you've reintroduced
+a local model yourself.
 
 **CORS errors in the browser console** — make sure `CORS_ORIGINS` in the
 backend's `.env` includes your frontend's actual URL (default

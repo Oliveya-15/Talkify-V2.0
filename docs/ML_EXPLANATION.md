@@ -14,9 +14,29 @@ Example: "The dog is running" and "A canine is sprinting" use almost no
 common words but should embed to nearby vectors, because they mean
 almost the same thing.
 
-Talkify uses `sentence-transformers/all-MiniLM-L6-v2`: free, runs on CPU,
-384-dimensional vectors, small enough to bundle without needing a paid
-embedding API. See `app/rag/embeddings.py`.
+Talkify calls Google's Gemini embedding API (`gemini-embedding-001`) to
+generate these vectors, requested at 384 dimensions. See
+`app/rag/embeddings.py`.
+
+**This wasn't the original design, and the reason why is itself worth
+understanding.** Talkify originally ran a small model locally via
+sentence-transformers/PyTorch — free, no API dependency, the more
+commonly recommended approach for a project like this. In production,
+that turned out to be the wrong call: PyTorch itself, independent of
+which model you load into it, needs somewhere from 200MB to over 1GB of
+resident memory once it's actually running, and every genuinely free,
+card-free hosting tier in 2026 caps out around 512MB. No amount of
+thread-limiting, batching, or memory-trimming changes the fact that a
+transformer model has to physically exist in RAM to do anything — that
+was proven out the hard way across several rounds of tuning that still
+weren't enough (see `docs/INTERVIEW_PREPARATION.md` for the full story).
+Moving to a hosted API call removed PyTorch from the backend entirely,
+dropping its measured memory footprint from an OOM-crashing 512MB+ to
+about 147MB RSS. The trade-off is explicit: embedding now requires
+internet access and a free API key, and unlike LLM generation (which
+has a real extractive fallback — see below), there's no meaningful local
+fallback for embeddings in a semantic-search pipeline, so a missing key
+fails fast and clearly instead of pretending to work.
 
 ## Cosine similarity
 
@@ -29,10 +49,11 @@ between two vectors, ignoring their length — a value near 1 means
 cosine_similarity(A, B) = (A · B) / (|A| * |B|)
 ```
 
-Talkify's embeddings are L2-normalized at creation time (see
-`embeddings.py`), which makes cosine similarity mathematically equal to
-a plain dot product — this is why `vector_store.py` can use FAISS's
-`IndexFlatIP` (inner product) directly as a similarity search.
+Talkify L2-normalizes every embedding after it comes back from the API
+(see `embeddings.py::_l2_normalize` — Gemini's vectors aren't guaranteed
+to already be unit-length), which makes cosine similarity mathematically
+equal to a plain dot product — this is why `vector_store.py` can use
+FAISS's `IndexFlatIP` (inner product) directly as a similarity search.
 
 ## Chunking
 
@@ -157,6 +178,13 @@ small (15-25 questions), is honest and defensible in an interview. See
 - **Does not implement a transformer architecture from scratch.** The
   embedding model and the LLM are both pre-trained; Talkify's own code
   starts at "what do I do with the vectors these models produce."
+- **Does not run the embedding model locally**, despite that being the
+  more commonly recommended approach for a project like this. This was
+  a deliberate, measured trade-off for free-tier deployment (see the
+  Embeddings section above), not an oversight — the chunking, hybrid
+  retrieval, and citation logic that actually matters for understanding
+  RAG are all still hand-built regardless of where the embedding vector
+  itself comes from.
 - **Does not use CNNs, RNNs, or a custom feed-forward network anywhere.**
   These solve problems (images, sequential/historical NLP) that aren't
   what this text-retrieval pipeline needs — including them would be

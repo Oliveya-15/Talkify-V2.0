@@ -20,3 +20,6 @@ frontend/dist/
 
 # OS
 .DS_Store
+
+# Custom local info
+info.txt
